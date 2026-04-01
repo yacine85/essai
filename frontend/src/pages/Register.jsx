@@ -1,0 +1,194 @@
+
+import { useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { Factory, Eye, EyeOff, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react'
+import { API_URL } from '../config/api'
+
+const ROLES = [
+  { value: 'pilote_test', label: 'Representant Test' },
+  { value: 'pilote_test_sec', label: 'Representant secondaire Test' },
+  { value: 'pilote_maintenance', label: 'Representant Maintenance' },
+  { value: 'pilote_maintenance_sec', label: 'Representant secondaire Maintenance' },
+  { value: 'pilote_depannage', label: 'Representant depannage' },
+  { value: 'pilote_depannage_sec', label: 'Representant secondaire depannage' },
+  { value: 'pilote_info_trace', label: 'Representant Information et Tracabilite' },
+  { value: 'pilote_info_trace_sec', label: 'Representant secondaire Information et Tracabilite' },
+  { value: 'pilote_qualite', label: 'Representant qualite' },
+  { value: 'pilote_qualite_sec', label: 'Representant secondaire qualite' },
+  { value: 'pilote_logistique', label: 'Representant logistique' },
+  { value: 'pilote_logistique_sec', label: 'Representant secondaire logistique' },
+  { value: 'pilote_cms2', label: 'Representant atelier CMS2' },
+  { value: 'pilote_cms2_sec', label: 'Representant secondaire atelier CMS2' },
+  { value: 'pilote_methode', label: 'Representant methode' },
+  { value: 'pilote_methode_sec', label: 'Representant secondaire methode' },
+  { value: 'pilote_process', label: 'Representant process' },
+  { value: 'pilote_process_sec', label: 'Representant secondaire process' },
+  { value: 'pilote_integration', label: 'Representant atelier Integration' },
+  { value: 'pilote_integration_sec', label: 'Representant secondaire atelier Integration' }
+]
+
+function Register() {
+  const [formData, setFormData] = useState({
+    nom: '',
+    prenom: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+    role: ''
+  })
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const navigate = useNavigate()
+
+  const handleChange = (e) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    setSuccess('')
+
+    if (!formData.nom.trim() || !formData.prenom.trim()) {
+      setError('Veuillez entrer votre nom et prenom')
+      return
+    }
+
+    if (!formData.email.trim()) {
+      setError('Veuillez entrer votre email')
+      return
+    }
+
+    if (formData.password.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caracteres')
+      return
+    }
+
+    if (formData.password !== formData.confirmPassword) {
+      setError('Les mots de passe ne correspondent pas')
+      return
+    }
+
+    if (!formData.role) {
+      setError('Le rôle est obligatoire')
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const response = await fetch(`${API_URL}/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nom: formData.nom,
+          prenom: formData.prenom,
+          email: formData.email,
+          password: formData.password,
+          role: formData.role
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        setSuccess('Compte cree avec succes! Redirection vers la page de connexion...')
+        setTimeout(() => { navigate('/login') }, 2000)
+      } else {
+        setError(data.error || 'Erreur lors de l\'inscription')
+      }
+    } catch (err) {
+      console.error('Register error:', err)
+      setError('Erreur de connexion au serveur')
+    }
+
+    setLoading(false)
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-card fade-in" style={{ maxWidth: '500px' }}>
+        <div className="login-logo">
+          <Factory size={48} color="#1a365d" />
+          <h1>Inscription</h1>
+          <p>Creer un compte sur la plateforme QRQC</p>
+        </div>
+
+        {error && (
+          <div className="alert alert-danger" style={{ marginBottom: 20 }}>
+            <AlertCircle size={20} />
+            {error}
+          </div>
+        )}
+
+        {success && (
+          <div className="alert alert-success" style={{ marginBottom: 20 }}>
+            <CheckCircle size={20} />
+            {success}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit}>
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label">Nom</label>
+              <input type="text" name="nom" className="form-input" placeholder="Votre nom" value={formData.nom} onChange={handleChange} required />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Prenom</label>
+              <input type="text" name="prenom" className="form-input" placeholder="Votre prenom" value={formData.prenom} onChange={handleChange} required />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Email</label>
+            <input type="email" name="email" className="form-input" placeholder="votre@email.fr" value={formData.email} onChange={handleChange} required />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Role</label>
+            <select name="role" className="form-select" value={formData.role} onChange={handleChange} required>
+              <option value="" disabled>Sélectionnez un rôle *</option>
+              {ROLES.map(role => (
+                <option key={role.value} value={role.value}>{role.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Mot de passe</label>
+            <div style={{ position: 'relative' }}>
+              <input type={showPassword ? 'text' : 'password'} name="password" className="form-input" placeholder="********" value={formData.password} onChange={handleChange} required style={{ paddingRight: 48 }} />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)' }}>
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Confirmer le mot de passe</label>
+            <input type={showPassword ? 'text' : 'password'} name="confirmPassword" className="form-input" placeholder="********" value={formData.confirmPassword} onChange={handleChange} required />
+          </div>
+
+          <button type="submit" className="btn btn-primary w-full" disabled={loading} style={{ marginTop: 8 }}>
+            {loading ? 'Inscription...' : 'S\'inscrire'}
+          </button>
+        </form>
+
+        <div style={{ marginTop: 24, textAlign: 'center' }}>
+          <Link to="/login" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--color-primary)', textDecoration: 'none', fontSize: 14 }}>
+            <ArrowLeft size={16} />
+            Retour a la connexion
+          </Link>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default Register
+
