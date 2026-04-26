@@ -4,7 +4,6 @@ import Layout from './components/Layout/Layout'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
-import DataEntry from './pages/DataEntry'
 import Users from './pages/Users'
 import Reports from './pages/Reports'
 import PlanActions from './pages/PlanActions'
@@ -40,11 +39,6 @@ function App() {
       }>
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<Dashboard />} />
-        <Route path="data-entry" element={
-          <PrivateRoute roles={['admin']}>
-            <DataEntry />
-          </PrivateRoute>
-        } />
         <Route path="users" element={
           <PrivateRoute roles={['admin']}>
             <Users />

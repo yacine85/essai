@@ -171,7 +171,6 @@ frontend/
 │   │   ├── Dashboard.jsx         ← NOUVEAU Dashboard
 │   │   ├── Dashboard_BACKUP.jsx  ← Ancien (archive)
 │   │   ├── Login.jsx
-│   │   ├── DataEntry.jsx
 │   │   └── ...
 │   │
 │   ├── styles/

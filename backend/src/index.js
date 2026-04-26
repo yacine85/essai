@@ -3,28 +3,18 @@ import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import dotenv from 'dotenv'
-import nodemailer from 'nodemailer'
 import pool, { testConnection } from './db.js'
 
 dotenv.config()
 
 const app = express()
 const PORT = process.env.PORT || 3002
-const ALLOWED_ORIGINS = String(process.env.CORS_ORIGINS || '')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean)
+const OLLAMA_BASE_URL = String(process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '')
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral'
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 30000)
 
 // Middleware
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) {
-      return callback(null, true)
-    }
-
-    return callback(new Error('CORS origin not allowed'))
-  }
-}))
+app.use(cors())
 app.use(express.json())
 
 // JWT Authentication middleware
@@ -45,415 +35,141 @@ const authenticateToken = (req, res, next) => {
   })
 }
 
-// Routes
-
-const REGISTRATION_ROLES = [
-  'pilote_test', 'pilote_test_sec',
-  'pilote_maintenance', 'pilote_maintenance_sec',
-  'pilote_depannage', 'pilote_depannage_sec',
-  'pilote_info_trace', 'pilote_info_trace_sec',
-  'pilote_qualite', 'pilote_qualite_sec',
-  'pilote_logistique', 'pilote_logistique_sec',
-  'pilote_cms2', 'pilote_cms2_sec',
-  'pilote_methode', 'pilote_methode_sec',
-  'pilote_process', 'pilote_process_sec',
-  'pilote_integration', 'pilote_integration_sec'
-]
-
-const SERVICE_BY_ROLE = {
-  pilote_test: 'test',
-  pilote_test_sec: 'test',
-  pilote_maintenance: 'maintenance',
-  pilote_maintenance_sec: 'maintenance',
-  pilote_depannage: 'depannage',
-  pilote_depannage_sec: 'depannage',
-  pilote_info_trace: 'info_trace',
-  pilote_info_trace_sec: 'info_trace',
-  pilote_qualite: 'qualite',
-  pilote_qualite_sec: 'qualite',
-  pilote_logistique: 'logistique',
-  pilote_logistique_sec: 'logistique',
-  pilote_cms2: 'cms2',
-  pilote_cms2_sec: 'cms2',
-  pilote_methode: 'methode',
-  pilote_methode_sec: 'methode',
-  pilote_process: 'process',
-  pilote_process_sec: 'process',
-  pilote_integration: 'integration',
-  pilote_integration_sec: 'integration'
+function cloneDate(date) {
+  return new Date(date.getTime())
 }
 
-const PRIMARY_ROLE_BY_SERVICE = {
-  test: 'pilote_test',
-  maintenance: 'pilote_maintenance',
-  depannage: 'pilote_depannage',
-  info_trace: 'pilote_info_trace',
-  qualite: 'pilote_qualite',
-  logistique: 'pilote_logistique',
-  cms2: 'pilote_cms2',
-  methode: 'pilote_methode',
-  process: 'pilote_process',
-  integration: 'pilote_integration'
+function startOfDay(date) {
+  const result = cloneDate(date)
+  result.setHours(0, 0, 0, 0)
+  return result
 }
 
-const SECONDARY_ROLE_BY_SERVICE = {
-  test: 'pilote_test_sec',
-  maintenance: 'pilote_maintenance_sec',
-  depannage: 'pilote_depannage_sec',
-  info_trace: 'pilote_info_trace_sec',
-  qualite: 'pilote_qualite_sec',
-  logistique: 'pilote_logistique_sec',
-  cms2: 'pilote_cms2_sec',
-  methode: 'pilote_methode_sec',
-  process: 'pilote_process_sec',
-  integration: 'pilote_integration_sec'
+function endOfDay(date) {
+  const result = cloneDate(date)
+  result.setHours(23, 59, 59, 999)
+  return result
 }
 
-const STATUS_LABELS = {
-  en_attente: 'En attente de validation',
-  en_cours: 'En cours',
-  refuse: 'Refusee',
-  cloture: 'Cloturee'
+function addDays(date, days) {
+  const result = cloneDate(date)
+  result.setDate(result.getDate() + days)
+  return result
 }
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-const LINE_COLOR_PALETTE = [
-  '#1f77b4',
-  '#ff7f0e',
-  '#2ca02c',
-  '#d62728',
-  '#9467bd',
-  '#8c564b',
-  '#e377c2',
-  '#7f7f7f',
-  '#bcbd22',
-  '#17becf'
-]
-
-const isAdminUser = (req) => req.user?.role === 'admin'
-
-function isHexColor(value) {
-  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
+function toSqlDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
-async function getNextLineColor(atelierId) {
-  const [existing] = await pool.query(
-    'SELECT color FROM lignes WHERE atelier_id = ? ORDER BY id ASC',
-    [atelierId]
-  )
+function getPeriodRange(periodKey) {
+  const today = new Date()
 
-  const used = new Set(
-    existing
-      .map((line) => String(line.color || '').toLowerCase())
-      .filter(Boolean)
-  )
-
-  const candidate = LINE_COLOR_PALETTE.find((color) => !used.has(color.toLowerCase()))
-  if (candidate) {
-    return candidate
+  if (periodKey === 'day-1') {
+    const targetDay = startOfDay(addDays(today, -1))
+    return {
+      key: 'day-1',
+      label: 'Jour -1',
+      startDate: toSqlDate(targetDay),
+      endDate: toSqlDate(endOfDay(targetDay)),
+      compareStartDate: toSqlDate(startOfDay(addDays(targetDay, -1))),
+      compareEndDate: toSqlDate(endOfDay(addDays(targetDay, -1)))
+    }
   }
 
-  const fallbackIndex = existing.length % LINE_COLOR_PALETTE.length
-  return LINE_COLOR_PALETTE[fallbackIndex]
-}
+  if (periodKey === 'month-1') {
+    const endDate = endOfDay(today)
+    const startDate = startOfDay(addDays(today, -29))
+    const compareEndDate = endOfDay(addDays(startDate, -1))
+    const compareStartDate = startOfDay(addDays(startDate, -30))
 
-let emailTransporter
-let emailTransporterInitialized = false
-
-function isValidEmail(email) {
-  return Boolean(email && EMAIL_REGEX.test(String(email).trim()))
-}
-
-function getStatusLabel(status) {
-  return STATUS_LABELS[status] || status
-}
-
-function getEmailTransporter() {
-  if (emailTransporterInitialized) {
-    return emailTransporter
+    return {
+      key: 'month-1',
+      label: 'Mois -1',
+      startDate: toSqlDate(startDate),
+      endDate: toSqlDate(endDate),
+      compareStartDate: toSqlDate(compareStartDate),
+      compareEndDate: toSqlDate(compareEndDate)
+    }
   }
 
-  emailTransporterInitialized = true
+  const endDate = endOfDay(today)
+  const startDate = startOfDay(addDays(today, -6))
+  const compareEndDate = endOfDay(addDays(startDate, -1))
+  const compareStartDate = startOfDay(addDays(startDate, -7))
 
-  const host = process.env.SMTP_HOST
-  const port = Number(process.env.SMTP_PORT || 587)
-  const user = process.env.SMTP_USER
-  const pass = process.env.SMTP_PASS
-
-  if (!host || !user || !pass) {
-    console.warn('Email notifications disabled: SMTP_HOST/SMTP_USER/SMTP_PASS are missing')
-    emailTransporter = null
-    return emailTransporter
-  }
-
-  emailTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: { user, pass }
-  })
-
-  return emailTransporter
-}
-
-async function logActionNotification({
-  gapAnalysisId,
-  notificationType,
-  recipientUserId,
-  recipientEmail,
-  recipientRole,
-  sendStatus,
-  errorMessage,
-  triggeredBy,
-  payload
-}) {
-  try {
-    await pool.query(
-      `INSERT INTO action_notification_history
-       (gap_analysis_id, notification_type, recipient_user_id, recipient_email, recipient_role, send_status, error_message, triggered_by, payload, sent_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-      [
-        gapAnalysisId,
-        notificationType,
-        recipientUserId || null,
-        recipientEmail || null,
-        recipientRole || null,
-        sendStatus,
-        errorMessage || null,
-        triggeredBy || null,
-        JSON.stringify(payload || {}),
-        sendStatus === 'sent' ? new Date() : null
-      ]
-    )
-  } catch (error) {
-    console.error('Error logging action notification:', error.message)
+  return {
+    key: 'week-1',
+    label: 'Semaine -1',
+    startDate: toSqlDate(startDate),
+    endDate: toSqlDate(endDate),
+    compareStartDate: toSqlDate(compareStartDate),
+    compareEndDate: toSqlDate(compareEndDate)
   }
 }
 
-async function fetchActionNotificationContext(actionId) {
-  const [actions] = await pool.query(
-    `SELECT
-      ga.id,
-      ga.date,
-      ga.kpi_nom,
-      ga.ecart,
-      ga.causes,
-      ga.actions,
-      ga.impact,
-      ga.service_code,
-      ga.deadline,
-      ga.statut,
-      ga.created_at,
-      a.nom AS atelier_nom,
-      l.nom AS ligne_nom,
-      creator.nom AS creator_nom,
-      creator.prenom AS creator_prenom
-     FROM gap_analysis ga
-     JOIN ateliers a ON ga.atelier_id = a.id
-     JOIN lignes l ON ga.ligne_id = l.id
-     JOIN users creator ON ga.created_by = creator.id
-     WHERE ga.id = ?`,
-    [actionId]
-  )
+function summarizeKpiRows(rows) {
+  const byKpi = new Map()
 
-  if (actions.length === 0) {
-    return null
+  for (const row of rows) {
+    const key = Number(row.kpi_id)
+    const current = byKpi.get(key) || {
+      id: row.kpi_id,
+      name: row.kpi_name,
+      objective: Number(row.objective || 0),
+      alert_threshold: Number(row.alert_threshold || 0),
+      inverse: Boolean(row.inverse),
+      unit: row.unit || '%',
+      sort_order: Number(row.sort_order || 0),
+      values: [],
+      latestDate: null,
+      latestValue: null
+    }
+
+    const value = Number(row.value || 0)
+    current.values.push(value)
+
+    if (!current.latestDate || new Date(row.date).getTime() > new Date(current.latestDate).getTime()) {
+      current.latestDate = row.date
+      current.latestValue = value
+    }
+
+    byKpi.set(key, current)
   }
 
-  const action = actions[0]
-  const primaryRole = PRIMARY_ROLE_BY_SERVICE[action.service_code]
-  const secondaryRole = SECONDARY_ROLE_BY_SERVICE[action.service_code]
+  return Array.from(byKpi.values())
+    .map((item) => {
+      const averageValue = item.values.length > 0
+        ? item.values.reduce((sum, value) => sum + value, 0) / item.values.length
+        : 0
+      const objective = Number(item.objective || 0)
+      const previousAverage = 0
 
-  const [recipients] = await pool.query(
-    `SELECT id, nom, prenom, email, role
-     FROM users
-     WHERE role IN (?, ?)
-     ORDER BY FIELD(role, ?, ?)`,
-    [primaryRole, secondaryRole, primaryRole, secondaryRole]
-  )
+      const achievement = objective > 0
+        ? (item.inverse ? (objective / Math.max(averageValue, 0.0001)) * 100 : (averageValue / objective) * 100)
+        : averageValue
 
-  return { action, recipients }
-}
-
-function buildActionNotificationEmail(action, notificationType) {
-  const statusLabel = getStatusLabel(action.statut)
-  const actionDescription = action.kpi_nom
-    ? `Action corrective liee au KPI ${action.kpi_nom}`
-    : 'Description non renseignee'
-
-  const notificationLabelByType = {
-    creation: 'Creation de l action',
-    validation: 'Validation de l action',
-    refus: 'Refus de l action',
-    cloture: 'Cloture de l action',
-    statut: 'Mise a jour du statut'
-  }
-
-  const notifLabel = notificationLabelByType[notificationType] || 'Mise a jour de l action'
-  const shouldAskDecision = action.statut === 'en_attente'
-  const subject = `[Plan d'Actions] Action #${action.id} - ${notifLabel}`
-
-  const lines = [
-    `Numero de l action: ${action.id}`,
-    `Description: ${actionDescription}`,
-    `Atelier: ${action.atelier_nom}`,
-    `KPI: ${action.kpi_nom || 'N/A'}`,
-    `Ligne: ${action.ligne_nom}`,
-    `Causes: ${action.causes || 'N/A'}`,
-    `Ecart: ${action.ecart ?? 'N/A'}`,
-    `Action: ${action.actions || 'N/A'}`,
-    `Impact: ${action.impact ?? 'N/A'}`,
-    `Service pilote: ${action.service_code}`,
-    `Date de creation: ${new Date(action.created_at).toLocaleString('fr-FR')}`,
-    `Delai: ${action.deadline ? new Date(action.deadline).toLocaleDateString('fr-FR') : 'N/A'}`,
-    `Statut actuel: ${statusLabel}`
-  ]
-
-  const decisionLine = shouldAskDecision
-    ? 'Merci de valider ou refuser cette action des que possible.'
-    : 'Merci de prendre en compte cette mise a jour de statut.'
-
-  const text = [
-    `Notification Plan d'Actions: ${notifLabel}`,
-    '',
-    ...lines,
-    '',
-    decisionLine
-  ].join('\n')
-
-  const htmlRows = lines
-    .map((line) => {
-      const splitIndex = line.indexOf(':')
-      if (splitIndex === -1) {
-        return `<tr><td colspan="2">${line}</td></tr>`
+      return {
+        id: item.id,
+        name: item.name,
+        objective,
+        alert_threshold: Number(item.alert_threshold || 0),
+        inverse: item.inverse,
+        unit: item.unit,
+        sort_order: Number(item.sort_order || 0),
+        average_value: Number(averageValue.toFixed(2)),
+        latest_value: Number((item.latestValue ?? 0).toFixed(2)),
+        values_count: item.values.length,
+        achievement: Number(achievement.toFixed(2)),
+        previous_average: Number(previousAverage.toFixed(2))
       }
-      const key = line.slice(0, splitIndex)
-      const value = line.slice(splitIndex + 1).trim()
-      return `<tr><td style="padding:6px 10px;border:1px solid #ddd;"><strong>${key}</strong></td><td style="padding:6px 10px;border:1px solid #ddd;">${value}</td></tr>`
     })
-    .join('')
-
-  const html = `
-    <div style="font-family:Arial,sans-serif;color:#222;">
-      <h2 style="margin-bottom:8px;">Notification Plan d Actions: ${notifLabel}</h2>
-      <table style="border-collapse:collapse;min-width:620px;">${htmlRows}</table>
-      <p style="margin-top:16px;"><strong>${decisionLine}</strong></p>
-    </div>
-  `
-
-  return { subject, text, html, notificationLabel: notifLabel }
+    .sort((a, b) => a.sort_order - b.sort_order || String(a.name).localeCompare(String(b.name), 'fr'))
 }
 
-async function notifyActionChange({ actionId, notificationType, triggeredBy }) {
-  try {
-    const context = await fetchActionNotificationContext(actionId)
-
-    if (!context) {
-      console.warn(`Action ${actionId} introuvable pour notification ${notificationType}`)
-      return
-    }
-
-    const { action, recipients } = context
-    const emailContent = buildActionNotificationEmail(action, notificationType)
-    const transporter = getEmailTransporter()
-
-    for (const recipient of recipients) {
-      const payload = {
-        action_id: action.id,
-        action_status: action.statut,
-        notification_type: notificationType,
-        service_code: action.service_code
-      }
-
-      if (!recipient.email) {
-        await logActionNotification({
-          gapAnalysisId: action.id,
-          notificationType,
-          recipientUserId: recipient.id,
-          recipientEmail: null,
-          recipientRole: recipient.role,
-          sendStatus: 'failed',
-          errorMessage: 'Adresse email manquante',
-          triggeredBy,
-          payload
-        })
-        continue
-      }
-
-      if (!isValidEmail(recipient.email)) {
-        await logActionNotification({
-          gapAnalysisId: action.id,
-          notificationType,
-          recipientUserId: recipient.id,
-          recipientEmail: recipient.email,
-          recipientRole: recipient.role,
-          sendStatus: 'failed',
-          errorMessage: 'Adresse email invalide',
-          triggeredBy,
-          payload
-        })
-        continue
-      }
-
-      if (!transporter) {
-        await logActionNotification({
-          gapAnalysisId: action.id,
-          notificationType,
-          recipientUserId: recipient.id,
-          recipientEmail: recipient.email,
-          recipientRole: recipient.role,
-          sendStatus: 'failed',
-          errorMessage: 'Transport SMTP non configure',
-          triggeredBy,
-          payload
-        })
-        continue
-      }
-
-      try {
-        await transporter.sendMail({
-          from: process.env.EMAIL_FROM || process.env.SMTP_USER,
-          to: recipient.email,
-          subject: emailContent.subject,
-          text: emailContent.text,
-          html: emailContent.html
-        })
-
-        await logActionNotification({
-          gapAnalysisId: action.id,
-          notificationType,
-          recipientUserId: recipient.id,
-          recipientEmail: recipient.email,
-          recipientRole: recipient.role,
-          sendStatus: 'sent',
-          errorMessage: null,
-          triggeredBy,
-          payload
-        })
-      } catch (error) {
-        await logActionNotification({
-          gapAnalysisId: action.id,
-          notificationType,
-          recipientUserId: recipient.id,
-          recipientEmail: recipient.email,
-          recipientRole: recipient.role,
-          sendStatus: 'failed',
-          errorMessage: error.message,
-          triggeredBy,
-          payload
-        })
-
-        console.error(
-          `Email notification failed for action ${action.id} to ${recipient.email}:`,
-          error.message
-        )
-      }
-    }
-  } catch (error) {
-    console.error(`Error while sending ${notificationType} notification for action ${actionId}:`, error)
-  }
-}
+// Routes
 
 // Health check
 app.get('/api/health', async (req, res) => {
@@ -462,6 +178,79 @@ app.get('/api/health', async (req, res) => {
     res.json({ status: 'ok', message: 'QRQC API is running', database: 'connected' })
   } catch (error) {
     res.json({ status: 'ok', message: 'QRQC API is running', database: 'disconnected' })
+  }
+})
+
+app.post('/api/ai/actions', authenticateToken, async (req, res) => {
+  const cause = String(req.body?.cause || '').trim()
+  const previousAction = String(req.body?.previousAction || '').trim()
+
+  if (!cause) {
+    return res.status(400).json({ error: 'Le champ cause est obligatoire' })
+  }
+
+  try {
+    const userPromptLines = [
+      `Cause : ${cause}`,
+      '',
+      'Contraintes :',
+      '- Retourne UNE seule action corrective.',
+      '- Action concrète, réaliste, professionnelle, immédiatement applicable.',
+      '- Formulation concise (1 a 3 phrases).'
+    ]
+
+    if (previousAction) {
+      userPromptLines.push('', `Proposition precedente a eviter : ${previousAction}`)
+    }
+
+    const systemPrompt = 'Tu es expert en amelioration continue industrielle et gestion de production. En fonction de la cause fournie dans un formulaire d\'action corrective, propose UNE seule meilleure action corrective, concrete, realiste, professionnelle et immediatement applicable. A chaque regeneration, proposer une idee differente si possible.'
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS)
+
+    let response
+    try {
+      response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: OLLAMA_MODEL,
+          system: systemPrompt,
+          prompt: userPromptLines.join('\n'),
+          stream: false,
+          options: {
+            temperature: 0.8
+          }
+        }),
+        signal: controller.signal
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    if (!response.ok) {
+      const errPayload = await response.json().catch(() => ({}))
+      return res.status(502).json({
+        error: errPayload.error || 'Impossible de joindre Ollama local. Verifiez que Ollama est lance.'
+      })
+    }
+
+    const completion = await response.json().catch(() => ({}))
+    const action = String(completion.response || '').trim()
+
+    if (!action) {
+      return res.status(502).json({ error: 'Aucune action n\'a ete generee par le modele' })
+    }
+
+    return res.json({ action })
+  } catch (error) {
+    console.error('AI action generation error:', error)
+    if (error.name === 'AbortError') {
+      return res.status(504).json({ error: 'Timeout Ollama: la generation a pris trop de temps' })
+    }
+    return res.status(500).json({ error: 'Erreur lors de la generation de l\'action corrective' })
   }
 })
 
@@ -503,14 +292,24 @@ app.post('/api/auth/login', async (req, res) => {
 // Register (inscription libre)
 app.post('/api/auth/register', async (req, res) => {
   const { nom, prenom, email, password, role } = req.body
-
-  const normalizedRole = typeof role === 'string' ? role.trim() : ''
-
-  if (!normalizedRole || !REGISTRATION_ROLES.includes(normalizedRole)) {
+  
+  // List of allowed roles for self-registration
+  const allowedRoles = [
+    'admin',
+    'pilote_test', 'pilote_test_sec', 'pilote_maintenance', 'pilote_maintenance_sec',
+    'pilote_depannage', 'pilote_depannage_sec', 'pilote_info_trace', 'pilote_info_trace_sec',
+    'pilote_qualite', 'pilote_qualite_sec', 'pilote_logistique', 'pilote_logistique_sec',
+    'pilote_cms2', 'pilote_cms2_sec', 'pilote_methode', 'pilote_methode_sec',
+    'pilote_process', 'pilote_process_sec', 'pilote_integration', 'pilote_integration_sec',
+    'chef_atelier', 'management'
+  ]
+  
+  if (!role || !allowedRoles.includes(role)) {
     return res.status(400).json({ success: false, error: 'Rôle obligatoire et valide requis' });
   }
-
-  const userRole = normalizedRole
+  const userRole = role;
+  
+  console.log('Register - Role received:', role, 'Final role:', userRole);
   
   try {
     // Check if email already exists
@@ -525,7 +324,8 @@ app.post('/api/auth/register', async (req, res) => {
       'INSERT INTO users (nom, prenom, email, password, role, atelier_id) VALUES (?, ?, ?, ?, ?, ?)',
       [nom, prenom, email, hashedPassword, userRole, null]
     )
-
+    console.log('User created with role:', userRole); // Debug
+    
     res.json({ success: true, id: result.insertId })
   } catch (error) {
     console.error('Register error:', error)
@@ -610,7 +410,7 @@ app.get('/api/lignes/:atelierId', authenticateToken, async (req, res) => {
   
   try {
     const [lignes] = await pool.query(
-      'SELECT id, atelier_id, nom, color FROM lignes WHERE atelier_id = ? ORDER BY id ASC',
+      'SELECT * FROM lignes WHERE atelier_id = ?',
       [atelierId]
     )
     res.json(lignes)
@@ -623,7 +423,7 @@ app.get('/api/lignes/:atelierId', authenticateToken, async (req, res) => {
 // Get all lignes
 app.get('/api/lignes', authenticateToken, async (req, res) => {
   try {
-    const [lignes] = await pool.query('SELECT id, atelier_id, nom, color FROM lignes ORDER BY atelier_id ASC, id ASC')
+    const [lignes] = await pool.query('SELECT * FROM lignes')
     res.json(lignes)
   } catch (error) {
     console.error('Error fetching lignes:', error)
@@ -633,29 +433,16 @@ app.get('/api/lignes', authenticateToken, async (req, res) => {
 
 // Create ligne
 app.post('/api/lignes', authenticateToken, async (req, res) => {
-  const { atelier_id, nom, color } = req.body
-
-  if (!atelier_id || !nom || !String(nom).trim()) {
-    return res.status(400).json({ error: 'atelier_id et nom sont requis' })
-  }
-
-  if (!isAdminUser(req)) {
-    return res.status(403).json({ error: 'Accès admin requis' })
-  }
+  const { atelier_id, nom } = req.body
   
   try {
-    const finalColor = isHexColor(color) ? color : await getNextLineColor(atelier_id)
     const [result] = await pool.query(
-      'INSERT INTO lignes (atelier_id, nom, color) VALUES (?, ?, ?)',
-      [atelier_id, nom, finalColor]
+      'INSERT INTO lignes (atelier_id, nom) VALUES (?, ?)',
+      [atelier_id, nom]
     )
 
-    const [[created]] = await pool.query(
-      'SELECT id, atelier_id, nom, color FROM lignes WHERE id = ?',
-      [result.insertId]
-    )
-
-    res.json({ success: true, ligne: created })
+    const [rows] = await pool.query('SELECT * FROM lignes WHERE id = ?', [result.insertId])
+    res.json({ success: true, id: result.insertId, ligne: rows[0] || null })
   } catch (error) {
     console.error('Error creating ligne:', error)
     res.status(500).json({ error: 'Server error' })
@@ -665,43 +452,11 @@ app.post('/api/lignes', authenticateToken, async (req, res) => {
 // Update ligne
 app.put('/api/lignes/:id', authenticateToken, async (req, res) => {
   const { id } = req.params
-  const { nom, color } = req.body
-
-  if (!isAdminUser(req)) {
-    return res.status(403).json({ error: 'Accès admin requis' })
-  }
-
-  if (color !== undefined && !isHexColor(color)) {
-    return res.status(400).json({ error: 'Format de couleur invalide. Utilisez #RRGGBB' })
-  }
+  const { nom } = req.body
   
   try {
-    const updates = []
-    const params = []
-
-    if (nom !== undefined) {
-      updates.push('nom = ?')
-      params.push(nom)
-    }
-
-    if (color !== undefined) {
-      updates.push('color = ?')
-      params.push(color)
-    }
-
-    if (updates.length === 0) {
-      return res.json({ success: true })
-    }
-
-    params.push(id)
-    await pool.query(`UPDATE lignes SET ${updates.join(', ')} WHERE id = ?`, params)
-
-    const [[updated]] = await pool.query(
-      'SELECT id, atelier_id, nom, color FROM lignes WHERE id = ?',
-      [id]
-    )
-
-    res.json({ success: true, ligne: updated })
+    await pool.query('UPDATE lignes SET nom = ? WHERE id = ?', [nom, id])
+    res.json({ success: true })
   } catch (error) {
     console.error('Error updating ligne:', error)
     res.status(500).json({ error: 'Server error' })
@@ -711,86 +466,12 @@ app.put('/api/lignes/:id', authenticateToken, async (req, res) => {
 // Delete ligne
 app.delete('/api/lignes/:id', authenticateToken, async (req, res) => {
   const { id } = req.params
-  const forceDelete = String(req.query.force || '').toLowerCase() === 'true'
-
-  if (!isAdminUser(req)) {
-    return res.status(403).json({ error: 'Accès admin requis' })
-  }
   
   try {
-    const [existing] = await pool.query('SELECT id, nom FROM lignes WHERE id = ?', [id])
-    if (!existing.length) {
-      return res.status(404).json({ error: 'Ligne introuvable' })
-    }
-
-    const dependencyChecks = [
-      { table: 'production', label: 'production' },
-      { table: 'arrets', label: 'arrets' },
-      { table: 'qualite', label: 'qualite' },
-      { table: 'effectif', label: 'effectif' },
-      { table: 'incidents', label: 'incidents' },
-      { table: 'indicateurs', label: 'indicateurs' },
-      { table: 'gap_analysis', label: 'actions' }
-    ]
-
-    const blockedBy = []
-    for (const dep of dependencyChecks) {
-      const [[row]] = await pool.query(
-        `SELECT COUNT(*) AS count FROM ${dep.table} WHERE ligne_id = ?`,
-        [id]
-      )
-
-      const count = Number(row?.count || 0)
-      if (count > 0) {
-        blockedBy.push({ table: dep.table, label: dep.label, count })
-      }
-    }
-
-    if (blockedBy.length > 0 && !forceDelete) {
-      const details = blockedBy.map((x) => `${x.label}: ${x.count}`).join(', ')
-      return res.status(409).json({
-        error: `Suppression impossible: cette ligne contient des donnees associees (${details}).`,
-        details: blockedBy,
-        canForceDelete: true
-      })
-    }
-
-    if (forceDelete) {
-      const connection = await pool.getConnection()
-
-      try {
-        await connection.beginTransaction()
-
-        await connection.query('DELETE FROM production WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM arrets WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM qualite WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM effectif WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM incidents WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM indicateurs WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM gap_analysis WHERE ligne_id = ?', [id])
-        await connection.query('DELETE FROM lignes WHERE id = ?', [id])
-
-        await connection.commit()
-        return res.json({ success: true, forced: true })
-      } catch (txError) {
-        await connection.rollback()
-        throw txError
-      } finally {
-        connection.release()
-      }
-    }
-
     await pool.query('DELETE FROM lignes WHERE id = ?', [id])
     res.json({ success: true })
   } catch (error) {
     console.error('Error deleting ligne:', error)
-
-    if (error?.code === 'ER_ROW_IS_REFERENCED_2' || error?.errno === 1451) {
-      return res.status(409).json({
-        error: 'Suppression impossible: cette ligne contient des donnees associees.'
-      })
-    }
-
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -826,10 +507,6 @@ app.get('/api/kpis', authenticateToken, async (req, res) => {
 app.post('/api/kpis', authenticateToken, async (req, res) => {
   const { atelier_id, name, objective, alert_threshold, inverse, unit } = req.body
 
-  if (!isAdminUser(req)) {
-    return res.status(403).json({ error: 'Accès admin requis' })
-  }
-
   if (!atelier_id || !name || !String(name).trim()) {
     return res.status(400).json({ error: 'atelier_id et name sont requis' })
   }
@@ -851,16 +528,16 @@ app.post('/api/kpis', authenticateToken, async (req, res) => {
         Number(alert_threshold ?? 0),
         Boolean(inverse),
         unit || '%',
-        maxSortOrder + 1
+        Number(maxSortOrder || 0) + 1
       ]
     )
 
-    const [[kpi]] = await pool.query(
+    const [rows] = await pool.query(
       'SELECT id, atelier_id, name, objective, alert_threshold, inverse, unit, sort_order FROM kpi_definitions WHERE id = ?',
       [result.insertId]
     )
 
-    res.json({ success: true, kpi })
+    res.json({ success: true, kpi: rows[0] || null })
   } catch (error) {
     console.error('Error creating KPI definition:', error)
     res.status(500).json({ error: 'Server error' })
@@ -870,54 +547,33 @@ app.post('/api/kpis', authenticateToken, async (req, res) => {
 // Update KPI definition
 app.put('/api/kpis/:id', authenticateToken, async (req, res) => {
   const { id } = req.params
-  const { name, objective, alert_threshold, inverse, unit, sort_order } = req.body
+  const { name, objective, alert_threshold, inverse, unit } = req.body
 
-  if (!isAdminUser(req)) {
-    return res.status(403).json({ error: 'Accès admin requis' })
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: 'name est requis' })
   }
 
   try {
-    const updates = []
-    const params = []
+    await pool.query(
+      `UPDATE kpi_definitions
+       SET name = ?, objective = ?, alert_threshold = ?, inverse = ?, unit = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [
+        String(name).trim(),
+        Number(objective ?? 0),
+        Number(alert_threshold ?? 0),
+        Boolean(inverse),
+        unit || '%',
+        id
+      ]
+    )
 
-    if (name !== undefined) {
-      updates.push('name = ?')
-      params.push(String(name).trim())
-    }
-    if (objective !== undefined) {
-      updates.push('objective = ?')
-      params.push(Number(objective))
-    }
-    if (alert_threshold !== undefined) {
-      updates.push('alert_threshold = ?')
-      params.push(Number(alert_threshold))
-    }
-    if (inverse !== undefined) {
-      updates.push('inverse = ?')
-      params.push(Boolean(inverse))
-    }
-    if (unit !== undefined) {
-      updates.push('unit = ?')
-      params.push(unit)
-    }
-    if (sort_order !== undefined) {
-      updates.push('sort_order = ?')
-      params.push(Number(sort_order))
-    }
-
-    if (updates.length === 0) {
-      return res.json({ success: true })
-    }
-
-    params.push(id)
-    await pool.query(`UPDATE kpi_definitions SET ${updates.join(', ')} WHERE id = ?`, params)
-
-    const [[kpi]] = await pool.query(
+    const [rows] = await pool.query(
       'SELECT id, atelier_id, name, objective, alert_threshold, inverse, unit, sort_order FROM kpi_definitions WHERE id = ?',
       [id]
     )
 
-    res.json({ success: true, kpi })
+    res.json({ success: true, kpi: rows[0] || null })
   } catch (error) {
     console.error('Error updating KPI definition:', error)
     res.status(500).json({ error: 'Server error' })
@@ -927,10 +583,6 @@ app.put('/api/kpis/:id', authenticateToken, async (req, res) => {
 // Delete KPI definition
 app.delete('/api/kpis/:id', authenticateToken, async (req, res) => {
   const { id } = req.params
-
-  if (!isAdminUser(req)) {
-    return res.status(403).json({ error: 'Accès admin requis' })
-  }
 
   try {
     await pool.query('DELETE FROM kpi_definitions WHERE id = ?', [id])
@@ -968,7 +620,7 @@ app.post('/api/kpi-values/upsert', authenticateToken, async (req, res) => {
   }
 })
 
-// Get KPI values for a specific date/atelier
+// Get KPI values
 app.get('/api/kpi-values', authenticateToken, async (req, res) => {
   const { date, atelier_id, ligne_id, kpi_id } = req.query
 
@@ -982,7 +634,6 @@ app.get('/api/kpi-values', authenticateToken, async (req, res) => {
         kv.kpi_id,
         kv.value,
         l.nom AS ligne_nom,
-        l.color AS ligne_color,
         kd.name AS kpi_name,
         kd.objective,
         kd.alert_threshold,
@@ -1023,7 +674,7 @@ app.get('/api/kpi-values', authenticateToken, async (req, res) => {
   }
 })
 
-// Get historical KPI series with filters
+// Get KPI historical series with filters
 app.get('/api/kpi-history', authenticateToken, async (req, res) => {
   const { atelier_id, ligne_id, kpi_id, start_date, end_date } = req.query
 
@@ -1039,7 +690,6 @@ app.get('/api/kpi-history', authenticateToken, async (req, res) => {
         kv.ligne_id,
         kv.kpi_id,
         l.nom AS ligne_nom,
-        l.color AS ligne_color,
         kd.name AS kpi_name,
         kd.objective,
         kd.alert_threshold,
@@ -1221,6 +871,127 @@ app.delete('/api/indicators/:id', authenticateToken, async (req, res) => {
     res.json({ success: true })
   } catch (error) {
     console.error('Error deleting indicators:', error)
+    res.status(500).json({ error: 'Server error' })
+  }
+})
+
+// Get product KPI history for reports
+app.get('/api/kpi-values/report', authenticateToken, async (req, res) => {
+  const { ligne_id, period = 'week-1' } = req.query
+
+  if (!ligne_id) {
+    return res.status(400).json({ error: 'ligne_id is required' })
+  }
+
+  try {
+    const [products] = await pool.query(
+      `SELECT l.id, l.nom, l.atelier_id, a.nom AS atelier_nom
+       FROM lignes l
+       JOIN ateliers a ON l.atelier_id = a.id
+       WHERE l.id = ?`,
+      [ligne_id]
+    )
+
+    if (products.length === 0) {
+      return res.status(404).json({ error: 'Produit introuvable' })
+    }
+
+    const product = products[0]
+    const periodRange = getPeriodRange(period)
+
+    const currentRows = await pool.query(
+      `SELECT
+         kv.date,
+         kv.value,
+         kv.kpi_id,
+         kd.name AS kpi_name,
+         kd.objective,
+         kd.alert_threshold,
+         kd.inverse,
+         kd.unit,
+         kd.sort_order
+       FROM kpi_values kv
+       JOIN kpi_definitions kd ON kv.kpi_id = kd.id
+       WHERE kv.ligne_id = ?
+         AND kv.date BETWEEN ? AND ?
+       ORDER BY kd.sort_order ASC, kv.date ASC`,
+      [ligne_id, periodRange.startDate, periodRange.endDate]
+    )
+
+    const comparisonRows = await pool.query(
+      `SELECT
+         kv.date,
+         kv.value,
+         kv.kpi_id,
+         kd.name AS kpi_name,
+         kd.objective,
+         kd.alert_threshold,
+         kd.inverse,
+         kd.unit,
+         kd.sort_order
+       FROM kpi_values kv
+       JOIN kpi_definitions kd ON kv.kpi_id = kd.id
+       WHERE kv.ligne_id = ?
+         AND kv.date BETWEEN ? AND ?
+       ORDER BY kd.sort_order ASC, kv.date ASC`,
+      [ligne_id, periodRange.compareStartDate, periodRange.compareEndDate]
+    )
+
+    const currentSummary = summarizeKpiRows(currentRows[0] || [])
+    const previousSummary = summarizeKpiRows(comparisonRows[0] || [])
+    const previousMap = new Map(previousSummary.map((item) => [Number(item.id), item]))
+
+    const kpis = currentSummary.map((item) => {
+      const previous = previousMap.get(Number(item.id))
+      const previousAverage = previous ? Number(previous.average_value || 0) : 0
+      const previousAchievement = previous ? Number(previous.achievement || 0) : 0
+      const deltaPercent = previousAverage > 0
+        ? ((item.average_value - previousAverage) / previousAverage) * 100
+        : (item.average_value > 0 ? 100 : 0)
+
+      return {
+        ...item,
+        previous_average: Number(previousAverage.toFixed(2)),
+        previous_achievement: Number(previousAchievement.toFixed(2)),
+        delta_percent: Number(deltaPercent.toFixed(2)),
+        trend: deltaPercent > 0 ? 'up' : deltaPercent < 0 ? 'down' : 'stable'
+      }
+    })
+
+    const averageScore = (items) => {
+      if (!items.length) return 0
+      return items.reduce((sum, item) => sum + Number(item.achievement || 0), 0) / items.length
+    }
+
+    const currentScore = averageScore(kpis)
+    const previousScore = averageScore(previousSummary)
+    const scoreDelta = previousScore > 0
+      ? ((currentScore - previousScore) / previousScore) * 100
+      : (currentScore > 0 ? 100 : 0)
+
+    const summaryDirection = scoreDelta >= 0 ? 'amélioration' : 'baisse'
+    const summaryText = kpis.length
+      ? `Le produit ${product.nom} a enregistré une ${summaryDirection} de ${Math.abs(scoreDelta).toFixed(1)}% sur la période sélectionnée.`
+      : `Aucune donnée KPI disponible pour le produit ${product.nom} sur la période sélectionnée.`
+
+    res.json({
+      product: {
+        id: product.id,
+        nom: product.nom,
+        atelier_id: product.atelier_id,
+        atelier_nom: product.atelier_nom
+      },
+      period: periodRange,
+      summary: {
+        current_score: Number(currentScore.toFixed(2)),
+        previous_score: Number(previousScore.toFixed(2)),
+        delta_percent: Number(scoreDelta.toFixed(2)),
+        text: summaryText
+      },
+      kpis
+    })
+  } catch (error) {
+    console.error('Error fetching product KPI report:', error)
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -1436,12 +1207,6 @@ app.get('/api/gap-analysis', authenticateToken, async (req, res) => {
       sql += ' AND ga.atelier_id = ?'
       params.push(atelier_id)
     }
-
-    const userService = SERVICE_BY_ROLE[req.user.role]
-    if (userService) {
-      sql += ' AND ga.service_code = ?'
-      params.push(userService)
-    }
     
     sql += ' GROUP BY ga.id ORDER BY ga.date DESC'
     
@@ -1455,47 +1220,40 @@ app.get('/api/gap-analysis', authenticateToken, async (req, res) => {
 
 // Save gap analysis (multi-pilot support)
 app.post('/api/gap-analysis', authenticateToken, async (req, res) => {
-  const { date, atelier_id, ligne_id, kpi_nom, ecart, causes, actions, impact, service_code, deadline } = req.body
+  const { date, atelier_id, ligne_id, kpi_nom, ecart, causes, actions, impact, pilot_ids, deadline, realise, statut, efficacite } = req.body
   
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Seul l\'administrateur peut créer une action' })
+    const isAdmin = req.user?.role === 'admin'
+    const hasEfficiency = efficacite === 0 || efficacite === 1 || efficacite === '0' || efficacite === '1'
+    const requestedStatus = String(statut || 'en_attente')
+
+    if (hasEfficiency && !isAdmin) {
+      return res.status(403).json({ error: 'Seul l\'administrateur peut renseigner l\'efficacité' })
     }
 
-    if (!service_code || !PRIMARY_ROLE_BY_SERVICE[service_code]) {
-      return res.status(400).json({ error: 'Service responsable obligatoire et invalide' })
+    if (hasEfficiency && !['cloture', 'cloture_valide'].includes(requestedStatus)) {
+      return res.status(400).json({ error: 'L\'efficacité est disponible uniquement après clôture' })
     }
 
-    const serviceRoles = [PRIMARY_ROLE_BY_SERVICE[service_code], SECONDARY_ROLE_BY_SERVICE[service_code]]
-    const [serviceReps] = await pool.query(
-      'SELECT id FROM users WHERE role IN (?, ?)',
-      serviceRoles
-    )
-
-    if (serviceReps.length < 2) {
-      return res.status(400).json({
-        error: 'Le service doit avoir un représentant principal et un représentant secondaire actifs'
-      })
-    }
+    const finalEfficacite = hasEfficiency ? Number(efficacite) : null
+    const finalStatut = hasEfficiency ? 'cloture_valide' : requestedStatus
+    const finalRealise = ['cloture', 'cloture_valide'].includes(finalStatut) ? true : Boolean(realise || false)
 
     const [result] = await pool.query(
-      'INSERT INTO gap_analysis (date, atelier_id, ligne_id, kpi_nom, ecart, causes, actions, impact, service_code, deadline, realise, statut, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)',
-      [date, atelier_id, ligne_id, kpi_nom || '', ecart, causes || '', actions || '', impact || 0, service_code, deadline || null, 'en_attente', req.user.id]
+      'INSERT INTO gap_analysis (date, atelier_id, ligne_id, kpi_nom, ecart, causes, actions, impact, deadline, realise, statut, efficacite, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [date, atelier_id, ligne_id, kpi_nom || '', ecart, causes || '', actions || '', impact || 0, deadline || null, finalRealise, finalStatut, finalEfficacite, req.user.id]
     )
     
     const actionId = result.insertId
     
-    const pilotValues = serviceReps.map(rep => [actionId, rep.id])
-    await pool.query(
-      'INSERT INTO gap_analysis_pilots (gap_analysis_id, pilot_id) VALUES ?',
-      [pilotValues]
-    )
-
-    await notifyActionChange({
-      actionId,
-      notificationType: 'creation',
-      triggeredBy: req.user.id
-    })
+    // Insert pilots if provided
+    if (pilot_ids && Array.isArray(pilot_ids) && pilot_ids.length > 0) {
+      const pilotValues = pilot_ids.map(pilot_id => [actionId, parseInt(pilot_id)])
+      await pool.query(
+        'INSERT INTO gap_analysis_pilots (gap_analysis_id, pilot_id) VALUES ?',
+        [pilotValues]
+      )
+    }
     
     res.json({ success: true, id: actionId })
   } catch (error) {
@@ -1509,10 +1267,6 @@ app.delete('/api/gap-analysis/:id', authenticateToken, async (req, res) => {
   const { id } = req.params
   
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Seul l\'administrateur peut supprimer une action' })
-    }
-
     await pool.query('DELETE FROM gap_analysis WHERE id = ?', [id])
     res.json({ success: true })
   } catch (error) {
@@ -1524,48 +1278,48 @@ app.delete('/api/gap-analysis/:id', authenticateToken, async (req, res) => {
 // Update gap analysis (multi-pilot support)
 app.put('/api/gap-analysis/:id', authenticateToken, async (req, res) => {
   const { id } = req.params
-  const { kpi_nom, causes, actions, impact, service_code, deadline } = req.body
+  const { kpi_nom, causes, actions, impact, pilot_ids, deadline, realise, statut, efficacite } = req.body
   
   try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Seul l\'administrateur peut modifier une action' })
-    }
-
-    if (!service_code || !PRIMARY_ROLE_BY_SERVICE[service_code]) {
-      return res.status(400).json({ error: 'Service responsable obligatoire et invalide' })
-    }
-
-    const [statusRows] = await pool.query('SELECT statut FROM gap_analysis WHERE id = ?', [id])
-    if (statusRows.length === 0) {
+    const [existingRows] = await pool.query('SELECT id, statut, efficacite FROM gap_analysis WHERE id = ?', [id])
+    if (existingRows.length === 0) {
       return res.status(404).json({ error: 'Action non trouvée' })
     }
 
-    const serviceRoles = [PRIMARY_ROLE_BY_SERVICE[service_code], SECONDARY_ROLE_BY_SERVICE[service_code]]
-    const [serviceReps] = await pool.query(
-      'SELECT id FROM users WHERE role IN (?, ?)',
-      serviceRoles
-    )
+    const existing = existingRows[0]
+    const isAdmin = req.user?.role === 'admin'
+    const hasEfficiency = efficacite === 0 || efficacite === 1 || efficacite === '0' || efficacite === '1'
+    const requestedStatus = String(statut || existing.statut || 'en_attente')
 
-    if (serviceReps.length < 2) {
-      return res.status(400).json({
-        error: 'Le service doit avoir un représentant principal et un représentant secondaire actifs'
-      })
+    if (hasEfficiency && !isAdmin) {
+      return res.status(403).json({ error: 'Seul l\'administrateur peut modifier l\'efficacité' })
     }
+
+    if (hasEfficiency && !['cloture', 'cloture_valide'].includes(existing.statut) && !['cloture', 'cloture_valide'].includes(requestedStatus)) {
+      return res.status(400).json({ error: 'L\'efficacité est modifiable uniquement après clôture' })
+    }
+
+    const nextEfficacite = hasEfficiency ? Number(efficacite) : existing.efficacite
+    const nextStatut = hasEfficiency ? 'cloture_valide' : requestedStatus
+    const nextRealise = ['cloture', 'cloture_valide'].includes(nextStatut) ? true : Boolean(realise || false)
 
     // Update main action
     await pool.query(
-      'UPDATE gap_analysis SET kpi_nom = ?, causes = ?, actions = ?, impact = ?, service_code = ?, deadline = ? WHERE id = ?',
-      [kpi_nom || '', causes || '', actions || '', impact || 0, service_code, deadline || null, id]
+      'UPDATE gap_analysis SET kpi_nom = ?, causes = ?, actions = ?, impact = ?, deadline = ?, realise = ?, statut = ?, efficacite = ? WHERE id = ?',
+      [kpi_nom || '', causes || '', actions || '', impact || 0, deadline || null, nextRealise, nextStatut, nextEfficacite, id]
     )
     
     // Clear existing pilots
     await pool.query('DELETE FROM gap_analysis_pilots WHERE gap_analysis_id = ?', [id])
     
-    const pilotValues = serviceReps.map(rep => [id, rep.id])
-    await pool.query(
-      'INSERT INTO gap_analysis_pilots (gap_analysis_id, pilot_id) VALUES ?',
-      [pilotValues]
-    )
+    // Add new pilots
+    if (pilot_ids && Array.isArray(pilot_ids) && pilot_ids.length > 0) {
+      const pilotValues = pilot_ids.map(pilot_id => [id, parseInt(pilot_id)])
+      await pool.query(
+        'INSERT INTO gap_analysis_pilots (gap_analysis_id, pilot_id) VALUES ?',
+        [pilotValues]
+      )
+    }
     
     res.json({ success: true })
   } catch (error) {
@@ -1588,9 +1342,9 @@ app.post('/api/gap-analysis/:id/validate', authenticateToken, async (req, res) =
   const { id } = req.params
   
   try {
-    // Get user role
+    // Get user info with atelier_id
     const [users] = await pool.query(
-      'SELECT id, role FROM users WHERE id = ?',
+      'SELECT id, role, atelier_id FROM users WHERE id = ?',
       [req.user.id]
     )
     
@@ -1612,8 +1366,24 @@ app.post('/api/gap-analysis/:id/validate', authenticateToken, async (req, res) =
     
     const action = actions[0]
     
-    const userService = SERVICE_BY_ROLE[user.role]
-    const canValidate = Boolean(userService) && userService === action.service_code && action.statut === 'en_attente'
+    const isAdmin = user.role === 'admin'
+    const isChefAtelier = user.role === 'chef_atelier'
+    const isManagement = user.role === 'management'
+    
+    let canValidate = false
+    
+    if (isAdmin || isChefAtelier || isManagement) {
+      canValidate = true
+    } else {
+      // Reps can validate if: their atelier matches OR they are assigned pilot
+      const isAssignedPilot = await pool.query(
+        'SELECT 1 FROM gap_analysis_pilots WHERE gap_analysis_id = ? AND pilot_id = ?',
+        [id, req.user.id]
+      )
+      
+      const atelierMatch = action.atelier_id === user.atelier_id
+      canValidate = isAssignedPilot[0].length > 0 || atelierMatch
+    }
     
     if (!canValidate) {
       return res.status(403).json({ error: 'Vous n\'avez pas le droit de valider cette action' })
@@ -1624,12 +1394,6 @@ app.post('/api/gap-analysis/:id/validate', authenticateToken, async (req, res) =
       'UPDATE gap_analysis SET statut = ? WHERE id = ?',
       ['en_cours', id]
     )
-
-    await notifyActionChange({
-      actionId: Number(id),
-      notificationType: 'validation',
-      triggeredBy: req.user.id
-    })
     
     res.json({ success: true, message: 'Action validée' })
   } catch (error) {
@@ -1643,9 +1407,9 @@ app.post('/api/gap-analysis/:id/reject', authenticateToken, async (req, res) => 
   const { id } = req.params
   
   try {
-    // Get user role
+    // Get user info with atelier_id
     const [users] = await pool.query(
-      'SELECT id, role FROM users WHERE id = ?',
+      'SELECT id, role, atelier_id FROM users WHERE id = ?',
       [req.user.id]
     )
     
@@ -1667,8 +1431,24 @@ app.post('/api/gap-analysis/:id/reject', authenticateToken, async (req, res) => 
     
     const action = actions[0]
     
-    const userService = SERVICE_BY_ROLE[user.role]
-    const canReject = Boolean(userService) && userService === action.service_code && action.statut === 'en_attente'
+    const isAdmin = user.role === 'admin'
+    const isChefAtelier = user.role === 'chef_atelier'
+    const isManagement = user.role === 'management'
+    
+    let canReject = false
+    
+    if (isAdmin || isChefAtelier || isManagement) {
+      canReject = true
+    } else {
+      // Reps can reject if: their atelier matches OR they are assigned pilot
+      const isAssignedPilot = await pool.query(
+        'SELECT 1 FROM gap_analysis_pilots WHERE gap_analysis_id = ? AND pilot_id = ?',
+        [id, req.user.id]
+      )
+      
+      const atelierMatch = action.atelier_id === user.atelier_id
+      canReject = isAssignedPilot[0].length > 0 || atelierMatch
+    }
     
     if (!canReject) {
       return res.status(403).json({ error: 'Vous n\'avez pas le droit de rejeter cette action' })
@@ -1679,12 +1459,6 @@ app.post('/api/gap-analysis/:id/reject', authenticateToken, async (req, res) => 
       'UPDATE gap_analysis SET statut = ? WHERE id = ?',
       ['refuse', id]
     )
-
-    await notifyActionChange({
-      actionId: Number(id),
-      notificationType: 'refus',
-      triggeredBy: req.user.id
-    })
     
     res.json({ success: true, message: 'Action rejetée' })
   } catch (error) {
@@ -1698,9 +1472,9 @@ app.post('/api/gap-analysis/:id/close', authenticateToken, async (req, res) => {
   const { id } = req.params
   
   try {
-    // Get user role
+    // Get user info with atelier_id
     const [users] = await pool.query(
-      'SELECT id, role FROM users WHERE id = ?',
+      'SELECT id, role, atelier_id FROM users WHERE id = ?',
       [req.user.id]
     )
     
@@ -1722,10 +1496,26 @@ app.post('/api/gap-analysis/:id/close', authenticateToken, async (req, res) => {
     
     const action = actions[0]
     
+    const isAdmin = user.role === 'admin'
+    const isChefAtelier = user.role === 'chef_atelier'
+    const isManagement = user.role === 'management'
     const isPrimaryRep = isRepresentant(user.role)
-    const userService = SERVICE_BY_ROLE[user.role]
     
-    const canClose = Boolean(isPrimaryRep && userService && userService === action.service_code && action.statut === 'en_cours')
+    let canClose = false
+    
+    if (isAdmin || isChefAtelier || isManagement || isPrimaryRep) {
+      // Primary reps can close if: assigned to action OR atelier match
+      if (isPrimaryRep) {
+        const isAssignedPilot = await pool.query(
+          'SELECT 1 FROM gap_analysis_pilots WHERE gap_analysis_id = ? AND pilot_id = ?',
+          [id, req.user.id]
+        )
+        const atelierMatch = action.atelier_id === user.atelier_id
+        canClose = isAssignedPilot[0].length > 0 || atelierMatch
+      } else {
+        canClose = true
+      }
+    }
     
     if (!canClose) {
       return res.status(403).json({ error: 'Vous n\'avez pas le droit de clôturer cette action (seuls les reps principaux peuvent clôturer)' })
@@ -1733,70 +1523,19 @@ app.post('/api/gap-analysis/:id/close', authenticateToken, async (req, res) => {
     
     // Update status to 'cloture'
     await pool.query(
-      'UPDATE gap_analysis SET statut = ?, realise = TRUE WHERE id = ?',
-      ['cloture', id]
+      `UPDATE gap_analysis
+       SET statut = CASE
+         WHEN efficacite IN (0, 1) THEN 'cloture_valide'
+         ELSE 'cloture'
+       END,
+       realise = TRUE
+       WHERE id = ?`,
+      [id]
     )
-
-    await notifyActionChange({
-      actionId: Number(id),
-      notificationType: 'cloture',
-      triggeredBy: req.user.id
-    })
     
     res.json({ success: true, message: 'Action clôturée' })
   } catch (error) {
     console.error('Error closing action:', error)
-    res.status(500).json({ error: 'Server error' })
-  }
-})
-
-// Get action notification history
-app.get('/api/gap-analysis/:id/notifications', authenticateToken, async (req, res) => {
-  const { id } = req.params
-
-  try {
-    const [actions] = await pool.query(
-      'SELECT id, service_code FROM gap_analysis WHERE id = ?',
-      [id]
-    )
-
-    if (actions.length === 0) {
-      return res.status(404).json({ error: 'Action non trouvée' })
-    }
-
-    const action = actions[0]
-    const userService = SERVICE_BY_ROLE[req.user.role]
-    const isAllowed = req.user.role === 'admin' || userService === action.service_code
-
-    if (!isAllowed) {
-      return res.status(403).json({ error: 'Acces refuse a cet historique de notifications' })
-    }
-
-    const [notifications] = await pool.query(
-      `SELECT
-        anh.id,
-        anh.gap_analysis_id,
-        anh.notification_type,
-        anh.recipient_user_id,
-        anh.recipient_email,
-        anh.recipient_role,
-        anh.send_status,
-        anh.error_message,
-        anh.sent_at,
-        anh.created_at,
-        anh.triggered_by,
-        trigger_user.nom AS trigger_nom,
-        trigger_user.prenom AS trigger_prenom
-       FROM action_notification_history anh
-       LEFT JOIN users trigger_user ON trigger_user.id = anh.triggered_by
-       WHERE anh.gap_analysis_id = ?
-       ORDER BY anh.created_at DESC`,
-      [id]
-    )
-
-    res.json(notifications)
-  } catch (error) {
-    console.error('Error fetching action notification history:', error)
     res.status(500).json({ error: 'Server error' })
   }
 })
@@ -2133,32 +1872,74 @@ async function initializePresencesTable() {
   }
 }
 
-async function initializeActionNotificationHistoryTable() {
+// Auto-create KPI dynamic tables if not exists
+async function initializeDynamicKpiTables() {
   try {
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS action_notification_history (
+      CREATE TABLE IF NOT EXISTS kpi_definitions (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        gap_analysis_id INT NOT NULL,
-        notification_type VARCHAR(50) NOT NULL,
-        recipient_user_id INT NULL,
-        recipient_email VARCHAR(255) NULL,
-        recipient_role VARCHAR(64) NULL,
-        send_status VARCHAR(32) NOT NULL,
-        error_message TEXT NULL,
-        triggered_by INT NULL,
-        payload JSON NULL,
-        sent_at DATETIME NULL,
+        atelier_id INT NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        objective DECIMAL(10,2) NOT NULL DEFAULT 0,
+        alert_threshold DECIMAL(10,2) NOT NULL DEFAULT 0,
+        inverse BOOLEAN NOT NULL DEFAULT FALSE,
+        unit VARCHAR(20) NOT NULL DEFAULT '%',
+        sort_order INT NOT NULL DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_action_notification_gap (gap_analysis_id),
-        INDEX idx_action_notification_created_at (created_at),
-        FOREIGN KEY (gap_analysis_id) REFERENCES gap_analysis(id) ON DELETE CASCADE,
-        FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE SET NULL,
-        FOREIGN KEY (triggered_by) REFERENCES users(id) ON DELETE SET NULL
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_kpi_per_atelier (atelier_id, name),
+        CONSTRAINT fk_kpi_def_atelier FOREIGN KEY (atelier_id) REFERENCES ateliers(id) ON DELETE CASCADE
       )
     `)
-    console.log('✅ Action notification history table ready')
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS kpi_values (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        date DATE NOT NULL,
+        atelier_id INT NOT NULL,
+        ligne_id INT NOT NULL,
+        kpi_id INT NOT NULL,
+        value DECIMAL(10,2) NOT NULL DEFAULT 0,
+        created_by INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_kpi_value_unique (date, atelier_id, ligne_id, kpi_id),
+        INDEX idx_kpi_values_date (date),
+        INDEX idx_kpi_values_atelier (atelier_id),
+        INDEX idx_kpi_values_ligne (ligne_id),
+        INDEX idx_kpi_values_kpi (kpi_id),
+        CONSTRAINT fk_kpi_values_atelier FOREIGN KEY (atelier_id) REFERENCES ateliers(id) ON DELETE CASCADE,
+        CONSTRAINT fk_kpi_values_ligne FOREIGN KEY (ligne_id) REFERENCES lignes(id) ON DELETE CASCADE,
+        CONSTRAINT fk_kpi_values_kpi FOREIGN KEY (kpi_id) REFERENCES kpi_definitions(id) ON DELETE CASCADE,
+        CONSTRAINT fk_kpi_values_user FOREIGN KEY (created_by) REFERENCES users(id)
+      )
+    `)
+
+    await pool.query(`
+      INSERT INTO kpi_definitions (atelier_id, name, objective, alert_threshold, inverse, unit, sort_order)
+      SELECT a.id, t.name, t.objective, t.alert_threshold, t.inverse, t.unit, t.sort_order
+      FROM ateliers a
+      JOIN (
+        SELECT 'TRG' AS name, 95.00 AS objective, 90.00 AS alert_threshold, 0 AS inverse, '%' AS unit, 1 AS sort_order
+        UNION ALL SELECT 'FOR', 95.00, 90.00, 0, '%', 2
+        UNION ALL SELECT 'FPY', 98.00, 95.00, 0, '%', 3
+        UNION ALL SELECT 'QTE', 800.00, 700.00, 0, '', 4
+        UNION ALL SELECT 'DMH', 8.00, 10.00, 1, 'h', 5
+      ) t
+      WHERE (
+        LOWER(a.nom) LIKE '%cms%'
+        OR LOWER(a.nom) LIKE '%integ%'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM kpi_definitions kd
+        WHERE kd.atelier_id = a.id AND kd.name = t.name
+      )
+    `)
+
+    console.log('✅ Dynamic KPI tables ready')
   } catch (error) {
-    console.error('Error creating action_notification_history table:', error.message)
+    console.error('Error creating dynamic KPI tables:', error.message)
   }
 }
 
@@ -2172,7 +1953,7 @@ app.listen(PORT, async () => {
   // Initialize presences table
   await initializePresencesTable()
 
-  // Initialize action notification history table
-  await initializeActionNotificationHistoryTable()
+  // Initialize dynamic KPI tables
+  await initializeDynamicKpiTables()
 })
 

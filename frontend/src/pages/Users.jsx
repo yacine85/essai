@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Plus, Edit, Trash2, Shield, User, Users as UsersIcon, Search, Calendar, Check, X, Clock, History, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Edit, Trash2, Users as UsersIcon, Search, Calendar, Check, X, History, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { API_URL } from '../config/api'
 
@@ -50,7 +50,6 @@ function Users() {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
-  const [presenceStats, setPresenceStats] = useState([])
   
   const [formData, setFormData] = useState({
     nom: '',
@@ -65,7 +64,6 @@ function Users() {
     fetchUsers()
     fetchAteliers()
     fetchPresences()
-    fetchPresenceStats()
   }, [])
 
   const fetchUsers = async () => {
@@ -109,24 +107,6 @@ function Users() {
       console.error('Error fetching presences:', error)
     } finally {
       setPresenceLoading(false)
-    }
-  }
-
-  const fetchPresenceStats = async () => {
-    try {
-      const authHeader = getAuthHeader()
-      const thirtyDaysAgo = new Date()
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-      const response = await fetch(
-        `${API_URL}/presences/stats?startDate=${thirtyDaysAgo.toISOString().split('T')[0]}`,
-        { headers: authHeader }
-      )
-      if (response.ok) {
-        const data = await response.json()
-        setPresenceStats(data)
-      }
-    } catch (error) {
-      console.error('Error fetching presence stats:', error)
     }
   }
 
@@ -266,7 +246,6 @@ function Users() {
         })
       })
       fetchPresences()
-      fetchPresenceStats()
     } catch (error) {
       console.error('Error updating presence:', error)
     }
@@ -292,7 +271,6 @@ function Users() {
         })
       })
       fetchPresences()
-      fetchPresenceStats()
     } catch (error) {
       console.error('Error marking all present:', error)
     }
@@ -399,47 +377,44 @@ function Users() {
     user.email?.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const presentCount = presences.filter(p => p.present).length
-  const absentCount = users.length - presentCount
-
   return (
-    <div className="fade-in">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <h2 style={{ marginBottom: 4 }}>Gestion des Utilisateurs</h2>
-          <p className="text-secondary">Administration des utilisateurs et de leurs droits</p>
+    <div className="fade-in users-page">
+      <div className="page-hero">
+        <div className="page-hero-content">
+          <h2>Gestion des Utilisateurs</h2>
+          <p>Administration des utilisateurs et de leurs droits</p>
         </div>
         {hasRole('admin') && activeTab === 'users' && (
-          <button className="btn btn-primary" onClick={() => {
-            setEditingUser(null)
-            setFormData({ nom: '', prenom: '', email: '', password: '', role: 'chef_atelier', atelier_id: '' })
-            setShowModal(true)
-          }}>
-            <Plus size={18} />
-            Nouvel Utilisateur
-          </button>
+          <div className="page-hero-actions">
+            <button className="btn btn-primary" onClick={() => {
+              setEditingUser(null)
+              setFormData({ nom: '', prenom: '', email: '', password: '', role: 'chef_atelier', atelier_id: '' })
+              setShowModal(true)
+            }}>
+              <Plus size={18} />
+              Nouvel Utilisateur
+            </button>
+          </div>
         )}
       </div>
 
       {/* Tabs */}
-      <div className="tabs" style={{ marginBottom: 24 }}>
-        <div 
-          className={`tab ${activeTab === 'users' ? 'active' : ''}`}
+      <div className="modern-tabs">
+        <button
+          className={`modern-tab${activeTab === 'users' ? ' is-active' : ''}`}
           onClick={() => setActiveTab('users')}
-          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
         >
-          <UsersIcon size={18} />
+          <UsersIcon size={16} />
           Utilisateurs
-        </div>
+        </button>
         {hasRole('admin') && (
-          <div 
-            className={`tab ${activeTab === 'presences' ? 'active' : ''}`}
+          <button
+            className={`modern-tab${activeTab === 'presences' ? ' is-active' : ''}`}
             onClick={() => setActiveTab('presences')}
-            style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
           >
-            <Calendar size={18} />
+            <Calendar size={16} />
             Présences
-          </div>
+          </button>
         )}
       </div>
 
@@ -447,7 +422,7 @@ function Users() {
       {activeTab === 'users' && (
         <>
           {/* Search */}
-          <div className="card" style={{ marginBottom: 24 }}>
+          <div className="card filter-card" style={{ marginBottom: 16 }}>
             <div className="card-body">
               <div style={{ position: 'relative', maxWidth: 400 }}>
                 <Search size={18} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-secondary)' }} />
@@ -463,41 +438,9 @@ function Users() {
             </div>
           </div>
 
-          {/* Stats */}
-          <div className="dashboard-grid" style={{ marginBottom: 24 }}>
-            <div className="kpi-card">
-              <div className="kpi-header">
-                <span className="kpi-title">Total Utilisateurs</span>
-                <UsersIcon size={20} />
-              </div>
-              <div className="kpi-value">{users.length}</div>
-            </div>
-            <div className="kpi-card success">
-              <div className="kpi-header">
-                <span className="kpi-title">Administrateurs</span>
-                <Shield size={20} />
-              </div>
-              <div className="kpi-value">{users.filter(u => u.role === 'admin').length}</div>
-            </div>
-            <div className="kpi-card warning">
-              <div className="kpi-header">
-                <span className="kpi-title">Chefs d'Atelier</span>
-                <User size={20} />
-              </div>
-              <div className="kpi-value">{users.filter(u => u.role === 'chef_atelier').length}</div>
-            </div>
-            <div className="kpi-card">
-              <div className="kpi-header">
-                <span className="kpi-title">Management</span>
-                <User size={20} />
-              </div>
-              <div className="kpi-value">{users.filter(u => u.role === 'management').length}</div>
-            </div>
-          </div>
-
           {/* Users Table */}
-          <div className="card">
-            <div className="card-body table-container">
+          <div className="card modern-table-card">
+            <div className="card-body table-container" style={{ padding: 0 }}>
               {loading ? (
                 <p>Chargement des utilisateurs...</p>
               ) : (
@@ -556,72 +499,113 @@ function Users() {
       {/* Presences Tab */}
       {activeTab === 'presences' && hasRole('admin') && (
         <>
-          {/* Date Selection */}
-          <div className="card" style={{ marginBottom: 24 }}>
-            <div className="card-body" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <div>
-                  <label className="form-label">Date de la réunion</label>
-                  <input
-                    type="date"
-                    className="form-input"
-                    value={selectedDate}
-                    onChange={(e) => setSelectedDate(e.target.value)}
-                    style={{ width: 'auto' }}
-                  />
+          {/* ── Barre de filtre ──────────────────────────────────────────── */}
+          <div style={{
+            background: '#fff',
+            borderRadius: 14,
+            border: '1px solid rgba(23,124,244,0.12)',
+            borderLeft: '3px solid #177cf4',
+            boxShadow: '0 2px 10px rgba(13,31,60,0.06)',
+            padding: '14px 20px',
+            marginBottom: 14,
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 14,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 20 }}>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 7 }}>
+                  <Calendar size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
+                  Date de la réunion
                 </div>
+                <input
+                  type="date"
+                  className="form-input"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  style={{ width: 'auto', minWidth: 170 }}
+                />
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn btn-primary" onClick={handleMarkAllPresent}>
-                  <Check size={18} />
-                  Marquer tous présents
-                </button>
+              <div style={{
+                padding: '6px 14px',
+                borderRadius: 20,
+                background: 'rgba(23,124,244,0.08)',
+                color: '#177cf4',
+                fontSize: 12,
+                fontWeight: 700,
+                border: '1px solid rgba(23,124,244,0.16)',
+                whiteSpace: 'nowrap',
+              }}>
+                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
               </div>
             </div>
+            <button className="btn btn-primary" onClick={handleMarkAllPresent} style={{ whiteSpace: 'nowrap' }}>
+              <Check size={16} />
+              Marquer tous présents
+            </button>
           </div>
 
-          {/* Presence Stats */}
-          <div className="dashboard-grid" style={{ marginBottom: 24 }}>
-            <div className="kpi-card success">
-              <div className="kpi-header">
-                <span className="kpi-title">Présents</span>
-                <Check size={20} />
+          {/* ── Chips de synthèse ─────────────────────────────────────────── */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            {[
+              {
+                label: 'Présents',
+                count: users.filter((u) => getPresenceStatus(u.id) === true).length,
+                color: '#15803d', bg: 'rgba(22,163,74,0.09)', border: 'rgba(22,163,74,0.2)',
+                icon: <Check size={13} />,
+              },
+              {
+                label: 'Absents',
+                count: users.filter((u) => getPresenceStatus(u.id) === false).length,
+                color: '#b91c1c', bg: 'rgba(220,38,38,0.08)', border: 'rgba(220,38,38,0.2)',
+                icon: <X size={13} />,
+              },
+              {
+                label: 'Non marqués',
+                count: users.filter((u) => getPresenceStatus(u.id) === null).length,
+                color: '#475569', bg: 'rgba(100,116,139,0.08)', border: 'rgba(100,116,139,0.15)',
+                icon: null,
+              },
+              {
+                label: 'Total',
+                count: users.length,
+                color: '#177cf4', bg: 'rgba(23,124,244,0.08)', border: 'rgba(23,124,244,0.2)',
+                icon: <UsersIcon size={13} />,
+              },
+            ].map(({ label, count, color, bg, border, icon }) => (
+              <div key={label} style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                padding: '8px 16px', borderRadius: 10,
+                background: bg, border: `1px solid ${border}`,
+                boxShadow: '0 1px 4px rgba(13,31,60,0.05)',
+              }}>
+                {icon && <span style={{ color, display: 'flex' }}>{icon}</span>}
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>{label}</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color, lineHeight: 1 }}>{count}</span>
               </div>
-              <div className="kpi-value">{presentCount}</div>
-            </div>
-            <div className="kpi-card danger">
-              <div className="kpi-header">
-                <span className="kpi-title">Absents</span>
-                <X size={20} />
-              </div>
-              <div className="kpi-value">{absentCount}</div>
-            </div>
-            <div className="kpi-card">
-              <div className="kpi-header">
-                <span className="kpi-title">Total</span>
-                <UsersIcon size={20} />
-              </div>
-              <div className="kpi-value">{users.length}</div>
-            </div>
-            <div className="kpi-card">
-              <div className="kpi-header">
-                <span className="kpi-title">Taux de présence</span>
-                <Clock size={20} />
-              </div>
-              <div className="kpi-value">
-                {users.length > 0 ? Math.round((presentCount / users.length) * 100) : 0}%
-              </div>
-            </div>
+            ))}
           </div>
 
-          {/* Presence Table */}
-          <div className="card">
-            <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3>Liste des présences - {new Date(selectedDate).toLocaleDateString('fr-FR')}</h3>
+          {/* ── Tableau des présences ─────────────────────────────────────── */}
+          <div className="card modern-table-card">
+            <div className="card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+              <h3 style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#0f172a' }}>
+                Liste des présences
+              </h3>
+              <span style={{
+                padding: '4px 14px', borderRadius: 20,
+                background: 'rgba(23,124,244,0.08)',
+                border: '1px solid rgba(23,124,244,0.16)',
+                color: '#177cf4', fontSize: 12, fontWeight: 700,
+              }}>
+                {new Date(selectedDate + 'T12:00:00').toLocaleDateString('fr-FR')}
+              </span>
             </div>
-            <div className="card-body table-container">
+            <div className="card-body table-container" style={{ padding: 0 }}>
               {presenceLoading ? (
-                <p>Chargement des présences...</p>
+                <p className="table-state">Chargement des présences...</p>
               ) : (
                 <table className="data-table">
                   <thead>
@@ -647,7 +631,7 @@ function Users() {
                           </td>
                           <td>
                             {presenceStatus === null ? (
-                              <span style={{ color: 'var(--color-text-secondary)' }}>Non marqué</span>
+                              <span className="status-indicator neutral">Non marqué</span>
                             ) : presenceStatus ? (
                               <span className="status-indicator success">
                                 <Check size={14} /> Présent
@@ -800,50 +784,6 @@ function Users() {
             </div>
           )}
 
-          {/* Statistics Section */}
-          <div className="card" style={{ marginTop: 24 }}>
-            <div className="card-header">
-              <h3>Statistiques des 30 derniers jours</h3>
-            </div>
-            <div className="card-body table-container">
-              {presenceStats.length === 0 ? (
-                <p style={{ textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-                  Aucune donnée disponible
-                </p>
-              ) : (
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Total</th>
-                      <th>Présents</th>
-                      <th>Absents</th>
-                      <th>Taux</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {presenceStats.map(stat => (
-                      <tr key={stat.date}>
-                        <td>{new Date(stat.date).toLocaleDateString('fr-FR')}</td>
-                        <td>{stat.total_users}</td>
-                        <td style={{ color: 'var(--color-success)' }}>{stat.present_count}</td>
-                        <td style={{ color: 'var(--color-danger)' }}>{stat.absent_count}</td>
-                        <td>
-                          <span style={{ 
-                            fontWeight: 600,
-                            color: stat.taux_presence >= 90 ? 'var(--color-success)' : 
-                                   stat.taux_presence >= 70 ? 'var(--color-warning)' : 'var(--color-danger)'
-                          }}>
-                            {stat.taux_presence}%
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
         </>
       )}
 

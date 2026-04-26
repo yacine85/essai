@@ -7,7 +7,10 @@ USE qrqc_prod;
 ALTER TABLE gap_analysis ADD COLUMN kpi_nom VARCHAR(100) DEFAULT '';
 
 -- Add statut column if it doesn't exist
-ALTER TABLE gap_analysis ADD COLUMN statut ENUM('en_attente', 'validee', 'en_cours', 'terminee', 'non_conforme') DEFAULT 'en_attente';
+ALTER TABLE gap_analysis ADD COLUMN statut ENUM('en_attente', 'en_cours', 'refuse', 'cloture', 'cloture_valide') DEFAULT 'en_attente';
+
+-- Add efficacite column if it doesn't exist
+ALTER TABLE gap_analysis ADD COLUMN efficacite TINYINT NULL;
 
 -- Update existing rows to have default values
 UPDATE gap_analysis SET kpi_nom = '' WHERE kpi_nom IS NULL;

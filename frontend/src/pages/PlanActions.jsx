@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { Plus, Trash2, Edit, Filter, Check, X, Lock } from 'lucide-react'
 import { API_URL } from '../config/api'
+import AIActionSuggestion from '../components/AIActionSuggestion'
 
 const STATUTS = [
   { value: 'en_attente', label: 'En attente de validation', color: '#f59e0b' },
   { value: 'en_cours', label: 'En cours', color: '#8b5cf6' },
   { value: 'refuse', label: 'Refusé', color: '#ef4444' },
-  { value: 'cloture', label: 'Clôturé', color: '#22c55e' }
+  { value: 'cloture', label: 'Clôturé', color: '#22c55e' },
+  { value: 'cloture_valide', label: 'Clôturé et validé', color: '#059669' }
 ]
 
 const SERVICE_OPTIONS = [
@@ -77,7 +79,8 @@ function PlanActions() {
     impact: '',
     service_code: '',
     deadline: '',
-    statut: 'en_attente'
+    statut: 'en_attente',
+    efficacite: ''
   })
 
   const fetchData = async () => {
@@ -127,6 +130,7 @@ function PlanActions() {
         impact: parseFloat(formData.impact) || 0,
         service_code: formData.service_code,
         deadline: formData.deadline || null,
+        efficacite: formData.efficacite === '' ? null : Number(formData.efficacite),
         kpi_nom: formData.kpi_nom,
         causes: formData.causes,
         actions: formData.actions,
@@ -186,7 +190,8 @@ function PlanActions() {
       impact: action.impact?.toString() || '',
       service_code: action.service_code || '',
       deadline: action.deadline || '',
-      statut: action.statut || 'en_attente'
+      statut: action.statut || 'en_attente',
+      efficacite: action.efficacite === 0 || action.efficacite === 1 ? String(action.efficacite) : ''
     })
     setShowModal(true)
   }
@@ -327,37 +332,40 @@ function PlanActions() {
   }
 
   return (
-    <div className="fade-in">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <h2 style={{ marginBottom: 4 }}>Plan d'Actions</h2>
-          <p className="text-secondary">Suivi des actions correctives</p>
+    <div className="fade-in plan-actions-page">
+      <div className="page-hero">
+        <div className="page-hero-content">
+          <h2>Plan d'Actions</h2>
+          <p>Suivi des actions correctives</p>
         </div>
         {isAdmin && (
-          <button className="btn btn-primary" onClick={() => {
-            setEditingAction(null)
-            setFormData({
-              atelier_id: '',
-              ligne_id: '',
-              kpi_nom: '',
-              ecart: '',
-              causes: '',
-              actions: '',
-              impact: '',
-              service_code: '',
-              deadline: '',
-              statut: 'en_attente'
-            })
-            setShowModal(true)
-          }}>
-            <Plus size={18} /> Nouvelle Action
-          </button>
+          <div className="page-hero-actions">
+            <button className="btn btn-primary" onClick={() => {
+              setEditingAction(null)
+              setFormData({
+                atelier_id: '',
+                ligne_id: '',
+                kpi_nom: '',
+                ecart: '',
+                causes: '',
+                actions: '',
+                impact: '',
+                service_code: '',
+                deadline: '',
+                statut: 'en_attente',
+                efficacite: ''
+              })
+              setShowModal(true)
+            }}>
+              <Plus size={18} /> Nouvelle Action
+            </button>
+          </div>
         )}
       </div>
 
-      <div className="card" style={{ marginBottom: 24 }}>
+      <div className="card filter-card" style={{ marginBottom: 16 }}>
         <div className="card-body">
-          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
             <Filter size={18} />
             <select className="form-select" style={{ width: 'auto' }} value={filterStatut} onChange={(e) => setFilterStatut(e.target.value)}>
               <option value="">Tous les statuts</option>
@@ -408,8 +416,8 @@ function PlanActions() {
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-body table-container">
+      <div className="card modern-table-card">
+        <div className="card-body table-container" style={{ padding: 0 }}>
           <table className="data-table">
             <thead>
               <tr>
@@ -424,14 +432,15 @@ function PlanActions() {
                 <th>Impact</th>
                 <th>Service Pilote</th>
                 <th>Délai</th>
+                <th>Efficacité</th>
                 <th>Gestion</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={12} style={{ textAlign: 'center' }}>Chargement...</td></tr>
+                <tr><td colSpan={13} style={{ textAlign: 'center' }}>Chargement...</td></tr>
               ) : visibleActions.length === 0 ? (
-                <tr><td colSpan={12} style={{ textAlign: 'center' }}>Aucune action</td></tr>
+                <tr><td colSpan={13} style={{ textAlign: 'center' }}>Aucune action</td></tr>
               ) : (
                 visibleActions.map((action, idx) => {
                   const statutInfo = getStatutInfo(action.statut)
@@ -452,7 +461,7 @@ function PlanActions() {
                           fontWeight: 500,
                           fontSize: 12
                         }}>
-                          {statutInfo.label}
+                          {action.statut === 'cloture_valide' ? '✅ Clôturé et validé' : statutInfo.label}
                         </span>
                       </td>
                       <td>{action.atelier_nom || '-'}</td>
@@ -469,6 +478,13 @@ function PlanActions() {
                         </div>
                       </td>
                       <td>{action.deadline || '-'}</td>
+                      <td>
+                        {action.efficacite === 1
+                          ? <span style={{ color: '#059669', fontWeight: 700 }}>1 - Efficace</span>
+                          : action.efficacite === 0
+                            ? <span style={{ color: '#b91c1c', fontWeight: 700 }}>0 - Inefficace</span>
+                            : '-'}
+                      </td>
                       <td>
                         <div style={{ display: 'flex', gap: 4 }}>
                           {/* Boutons de validation/rejet pour représentants */}
@@ -578,6 +594,13 @@ function PlanActions() {
               <div className="form-group">
                 <label className="form-label">Actions à mener</label>
                 <textarea className="form-textarea" value={formData.actions} onChange={(e) => setFormData({ ...formData, actions: e.target.value })} />
+                <AIActionSuggestion
+                  cause={formData.causes}
+                  currentAction={formData.actions}
+                  onAccept={(suggestedAction) => setFormData({ ...formData, actions: suggestedAction })}
+                  apiUrl={API_URL}
+                  authHeaders={getAuthHeader()}
+                />
               </div>
               <div className="form-row">
                 <div className="form-group">
@@ -589,6 +612,27 @@ function PlanActions() {
                   <input type="date" className="form-input" value={formData.deadline} onChange={(e) => setFormData({ ...formData, deadline: e.target.value })} />
                 </div>
               </div>
+
+              {isAdmin && (
+                <div className="form-group">
+                  <label className="form-label">Efficacité (admin)</label>
+                  <select
+                    className="form-select"
+                    value={formData.efficacite}
+                    onChange={(e) => setFormData({ ...formData, efficacite: e.target.value })}
+                    disabled={!['cloture', 'cloture_valide'].includes(String(formData.statut || editingAction?.statut || ''))}
+                  >
+                    <option value="">Non définie</option>
+                    <option value="1">1 - Efficace</option>
+                    <option value="0">0 - Inefficace</option>
+                  </select>
+                  {!['cloture', 'cloture_valide'].includes(String(formData.statut || editingAction?.statut || '')) && (
+                    <p className="text-small text-secondary" style={{ marginTop: 6 }}>
+                      L'efficacité est modifiable uniquement après clôture.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => setShowModal(false)}>Annuler</button>

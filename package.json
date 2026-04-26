@@ -3,14 +3,17 @@
   "version": "1.0.0",
   "description": "QRQC - Production Management Application",
   "scripts": {
+    "dev:all": "concurrently \"npm run server\" \"npm run client\"",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
-    "client": "cd frontend && npm run dev",
-    "server": "cd backend && npm run dev",
+    "client": "kill-port 5173 5174 5175 5176 5177 && cd frontend && npm run dev",
+    "server": "kill-port 3002 && cd backend && npm run dev",
     "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
     "build": "cd frontend && npm run build"
   },
   "dependencies": {
     "concurrently": "^8.2.2"
+  },
+  "devDependencies": {
+    "kill-port": "^2.0.1"
   }
 }
-

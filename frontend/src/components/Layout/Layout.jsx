@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../../context/AuthContext'
+import SagemcomLogo from '../Brand/SagemcomLogo'
 import { 
   LayoutDashboard, 
-  ClipboardList, 
   Users, 
   FileBarChart, 
   LogOut, 
@@ -16,10 +16,13 @@ import {
 } from 'lucide-react'
 
 function Layout() {
+  const INITIAL_TIMER_SECONDS = 30 * 60
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [timeLeft, setTimeLeft] = useState(INITIAL_TIMER_SECONDS)
+  const [timerStatus, setTimerStatus] = useState('idle')
 
   const handleLogout = () => {
     logout()
@@ -28,7 +31,6 @@ function Layout() {
 
   const navItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['admin', 'chef_atelier', 'management', 'pilote_test', 'pilote_test_sec', 'pilote_maintenance', 'pilote_maintenance_sec', 'pilote_depannage', 'pilote_depannage_sec', 'pilote_info_trace', 'pilote_info_trace_sec', 'pilote_qualite', 'pilote_qualite_sec', 'pilote_logistique', 'pilote_logistique_sec', 'pilote_cms2', 'pilote_cms2_sec', 'pilote_methode', 'pilote_methode_sec', 'pilote_process', 'pilote_process_sec', 'pilote_integration', 'pilote_integration_sec'] },
-    { path: '/data-entry', icon: ClipboardList, label: 'Saisie Données', roles: ['admin'] },
     { path: '/plan-actions', icon: Target, label: 'Plan Actions', roles: ['admin', 'chef_atelier', 'management', 'pilote_test', 'pilote_test_sec', 'pilote_maintenance', 'pilote_maintenance_sec', 'pilote_depannage', 'pilote_depannage_sec', 'pilote_info_trace', 'pilote_info_trace_sec', 'pilote_qualite', 'pilote_qualite_sec', 'pilote_logistique', 'pilote_logistique_sec', 'pilote_cms2', 'pilote_cms2_sec', 'pilote_methode', 'pilote_methode_sec', 'pilote_process', 'pilote_process_sec', 'pilote_integration', 'pilote_integration_sec'] },
     { path: '/users', icon: Users, label: 'Utilisateurs', roles: ['admin'] },
     { path: '/reports', icon: FileBarChart, label: 'Rapports', roles: ['admin'] },
@@ -70,6 +72,58 @@ function Layout() {
     day: 'numeric'
   })
 
+  useEffect(() => {
+    if (timerStatus !== 'running') return undefined
+
+    const intervalId = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          setTimerStatus('idle')
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(intervalId)
+  }, [timerStatus])
+
+  const formatCountdown = (totalSeconds) => {
+    const safeSeconds = Math.max(0, Number(totalSeconds || 0))
+    const minutes = Math.floor(safeSeconds / 60)
+    const seconds = safeSeconds % 60
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+
+  const getTimerClassName = () => {
+    if (timeLeft <= 60) return 'timer-display timer-critical timer-blink'
+    if (timeLeft <= 5 * 60) return 'timer-display timer-danger'
+    if (timeLeft <= 10 * 60) return 'timer-display timer-warning'
+    return 'timer-display'
+  }
+
+  const handleStartTimer = () => {
+    if (timeLeft <= 0) {
+      setTimeLeft(INITIAL_TIMER_SECONDS)
+    }
+    setTimerStatus('running')
+  }
+
+  const handlePauseTimer = () => {
+    if (timerStatus !== 'running') return
+    setTimerStatus('paused')
+  }
+
+  const handleResumeTimer = () => {
+    if (timeLeft <= 0) return
+    setTimerStatus('running')
+  }
+
+  const handleResetTimer = () => {
+    setTimeLeft(INITIAL_TIMER_SECONDS)
+    setTimerStatus('idle')
+  }
+
   const sidebarVariants = {
     expanded: { width: 280, transition: { duration: 0.3 } },
     collapsed: { width: 80, transition: { duration: 0.3 } }
@@ -100,7 +154,11 @@ function Layout() {
       >
         <div className="sidebar-header">
           <div className="sidebar-logo">
-            {!sidebarCollapsed && <span>QRQC</span>}
+            {sidebarCollapsed ? (
+              <SagemcomLogo variant="icon" className="sidebar-logo-mark" />
+            ) : (
+              <SagemcomLogo variant="wordmark" className="sidebar-logo-wordmark" />
+            )}
           </div>
           {!sidebarCollapsed && (
             <div className="sidebar-subtitle">Management Production</div>
@@ -199,9 +257,34 @@ function Layout() {
           >
             {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
-          <h1>QRQC</h1>
-          <div className="header-date">
-            {today}
+          <div className="header-brand">
+            <SagemcomLogo variant="icon" className="header-brand-mark" />
+            <div className="header-brand-copy">
+              <span className="header-brand-name">Sagemcom</span>
+              <span className="header-brand-tag">Management Production</span>
+            </div>
+          </div>
+          <div className="header-right">
+            <div className="header-date">
+              {today}
+            </div>
+            <div className="header-timer" role="timer" aria-live="polite">
+              <div className={getTimerClassName()}>{formatCountdown(timeLeft)}</div>
+              <div className="timer-controls">
+                <button className="timer-btn" onClick={handleStartTimer} disabled={timerStatus === 'running'}>
+                  Démarrer
+                </button>
+                <button className="timer-btn" onClick={handlePauseTimer} disabled={timerStatus !== 'running'}>
+                  Pause
+                </button>
+                <button className="timer-btn" onClick={handleResumeTimer} disabled={timerStatus !== 'paused' || timeLeft <= 0}>
+                  Reprendre
+                </button>
+                <button className="timer-btn timer-btn-reset" onClick={handleResetTimer}>
+                  Réinitialiser
+                </button>
+              </div>
+            </div>
           </div>
         </header>
 
